@@ -1,6 +1,7 @@
 /**
  * Live loop for the human terminal report: paint a frame, then repaint on a
- * fixed refresh interval until the operator quits with `q` or Ctrl+C. Every
+ * fixed refresh interval until the operator quits with `q` or Ctrl+C. `r`
+ * reloads immediately and restarts the interval. Every
  * terminal effect is injected so the loop is exercised without a real TTY, and
  * the alternate screen, cursor, and raw mode are always restored - including
  * when a refresh throws. This is presentation only; it derives nothing new.
@@ -53,14 +54,9 @@ const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l";
 const LEAVE_SCREEN = "\x1b[?25h\x1b[?1049l";
 const CLEAR_SCREEN = "\x1b[H\x1b[2J";
 
-type ScrollCommand =
-  | "quit"
-  | "up"
-  | "down"
-  | "page-up"
-  | "page-down"
-  | "top"
-  | "bottom";
+type ScrollCommand = "up" | "down" | "page-up" | "page-down" | "top" | "bottom";
+
+type LiveCommand = ScrollCommand | "quit" | "refresh";
 
 /** Escape sequences, longest first so `\x1b[1~` never matches as `\x1b[1`. */
 const ESCAPE_KEYS: ReadonlyArray<readonly [string, ScrollCommand]> = [
@@ -79,11 +75,13 @@ const ESCAPE_KEYS: ReadonlyArray<readonly [string, ScrollCommand]> = [
 ];
 
 /** `q`, plus Ctrl+C and Ctrl+D, which raw mode delivers as data, not signals. */
-const CHARACTER_KEYS: Readonly<Record<string, ScrollCommand>> = {
+const CHARACTER_KEYS: Readonly<Record<string, LiveCommand>> = {
   q: "quit",
   Q: "quit",
   "\x03": "quit",
   "\x04": "quit",
+  r: "refresh",
+  R: "refresh",
   j: "down",
   k: "up",
   "\x05": "down",
@@ -97,7 +95,7 @@ const CHARACTER_KEYS: Readonly<Record<string, ScrollCommand>> = {
   G: "bottom",
 };
 
-type WakeReason = "tick" | "resize" | "scroll" | "quit";
+type WakeReason = "tick" | "resize" | "scroll" | "refresh" | "quit";
 
 /**
  * Run the live report until the operator quits, and return the last snapshot
@@ -130,22 +128,28 @@ export async function runLiveTui<T>({
   // current rows and frame bounds. In particular, input received while load()
   // is pending must not be clamped against stale pre-resize bounds.
   let offset = 0;
-  const pendingScrollCommands: Array<Exclude<ScrollCommand, "quit">> = [];
+  const pendingScrollCommands: ScrollCommand[] = [];
   let pendingKeyInput = "";
   const onData = (chunk: Buffer | string): void => {
     const text = pendingKeyInput + chunk.toString();
     const parsed = parseKeys(text);
     pendingKeyInput = parsed.remainder;
     let scrolled = false;
+    let refresh = false;
     for (const command of parsed.commands) {
       if (command === "quit") {
         requestQuit();
         return;
       }
+      if (command === "refresh") {
+        refresh = true;
+        continue;
+      }
       pendingScrollCommands.push(command);
       scrolled = true;
     }
-    if (scrolled) notify("scroll");
+    if (refresh) notify("refresh");
+    else if (scrolled) notify("scroll");
   };
 
   const stopResize = io.onResize?.(() => {
@@ -231,10 +235,10 @@ export async function runLiveTui<T>({
 
 /** Decode raw-mode input into commands while retaining a split escape suffix. */
 function parseKeys(text: string): {
-  commands: ScrollCommand[];
+  commands: LiveCommand[];
   remainder: string;
 } {
-  const commands: ScrollCommand[] = [];
+  const commands: LiveCommand[] = [];
   let index = 0;
   while (index < text.length) {
     const escape = ESCAPE_KEYS.find(([sequence]) =>

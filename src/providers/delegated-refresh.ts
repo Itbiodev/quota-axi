@@ -66,8 +66,12 @@ export type RefreshDelegate = {
   args: readonly string[];
   /** Wall-clock budget for how long quota-axi waits for the delegated run. */
   waitBudgetMs: number;
-  /** Extra environment forced onto the child, merged last. */
-  env?: Readonly<Record<string, string>>;
+  /**
+   * Extra environment merged last. `undefined` unsets a key inherited from
+   * quota-axi's process so an extra Claude profile cannot refresh the selected
+   * session's store.
+   */
+  env?: Readonly<Record<string, string | undefined>>;
 };
 
 export type DelegatedRefreshRun =
@@ -107,6 +111,18 @@ const NON_INTERACTIVE_ENV: Readonly<Record<string, string>> = {
   NO_OPEN_BROWSER: "1",
 };
 
+function childEnv(
+  extra?: Readonly<Record<string, string | undefined>>,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...NON_INTERACTIVE_ENV };
+  if (!extra) return env;
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
+  return env;
+}
+
 export async function runRefreshDelegate(
   delegate: RefreshDelegate,
 ): Promise<DelegatedRefreshRun> {
@@ -126,7 +142,7 @@ export async function runRefreshDelegate(
         // Its own process group, so a signal sent to quota-axi's group - the
         // Ctrl+C that quits a live `--tui` - cannot interrupt a token exchange.
         detached: true,
-        env: { ...process.env, ...NON_INTERACTIVE_ENV, ...delegate.env },
+        env: childEnv(delegate.env),
       });
     } catch {
       resolve({ status: "failed", error: REFRESH_SPAWN_FAILED });

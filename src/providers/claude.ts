@@ -1,7 +1,11 @@
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
-import { deleteCachedProvider, readCachedClaudeProvider } from "../cache.js";
+import {
+  deleteCachedProvider,
+  readCachedClaudeProvider,
+  stampClaudeCredentialContextId,
+} from "../cache.js";
 import {
   claudeCredentialContextId,
   claudeKeychainAccessMarkerPath,
@@ -14,8 +18,11 @@ import {
   CLAUDE_KEYCHAIN_SERVICE,
   CLAUDE_OAUTH_TOKEN_ENV,
   claudeEnvOauthToken,
+  claudeProfileOverride,
+  discoverClaudeProfileLanes,
   isOpaqueSuffixedKeychainService,
   claudeProfileLocations,
+  runWithClaudeProfile,
 } from "../lib/claude-profile.js";
 import { execFileText } from "../lib/process.js";
 import { listRunningCommandLines } from "../lib/running-processes.js";
@@ -24,6 +31,7 @@ import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
+  ProviderAccount,
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
@@ -162,9 +170,22 @@ type ScopedLimitEntry = {
 export const claudeAdapter: ProviderAdapter = {
   id: "claude",
   label: "Claude",
+  discoverAccounts,
   fetchQuota,
   inspectAuth,
 };
+
+async function discoverAccounts(): Promise<ProviderAccount[] | undefined> {
+  const lanes = discoverClaudeProfileLanes();
+  if (!lanes) return undefined;
+  return lanes.map((lane) => ({
+    accountKey: lane.accountKey,
+    fetchQuota: (options) =>
+      runWithClaudeProfile(lane, () => fetchQuota(options)),
+    inspectAuth: (options) =>
+      runWithClaudeProfile(lane, () => inspectAuth(options)),
+  }));
+}
 
 /**
  * `claude doctor` is the smallest observed non-interactive Claude Code command
@@ -193,6 +214,26 @@ const CLAUDE_CLI_REFRESH_DELEGATE: RefreshDelegate = {
   waitBudgetMs: 45_000,
 };
 
+/**
+ * An extra profile lane must point `claude doctor` at that directory and must
+ * not inherit the process environment token or secure-storage selector, which
+ * name the currently selected session.
+ */
+function claudeRefreshDelegate(): RefreshDelegate {
+  const override = claudeProfileOverride();
+  if (!override) return CLAUDE_CLI_REFRESH_DELEGATE;
+  return {
+    ...CLAUDE_CLI_REFRESH_DELEGATE,
+    env: {
+      CLAUDE_CONFIG_DIR: override.configured ? override.configDir : undefined,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: override.secureStorageDir,
+      [CLAUDE_OAUTH_TOKEN_ENV]: override.includeEnvToken
+        ? process.env[CLAUDE_OAUTH_TOKEN_ENV]
+        : undefined,
+    },
+  };
+}
+
 type ClaudeQuotaPass =
   | { kind: "success"; report: ProviderQuota }
   | {
@@ -214,6 +255,14 @@ type ClaudeQuotaPass =
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  const report = await readClaudeQuota(options);
+  stampClaudeCredentialContextId(report, claudeCredentialContextId());
+  return report;
+}
+
+async function readClaudeQuota(
+  options: ProviderOptions,
+): Promise<ProviderQuota> {
   if (isProfileOnly(options)) return fetchProfileOnlyQuota();
 
   const attempts: SourceAttempt[] = [];
@@ -233,8 +282,9 @@ export async function fetchQuota(
         error: blocker,
       });
     } else {
-      const run = await runRefreshDelegate(CLAUDE_CLI_REFRESH_DELEGATE);
-      attempts.push(refreshDelegateAttempt(CLAUDE_CLI_REFRESH_DELEGATE, run));
+      const delegate = claudeRefreshDelegate();
+      const run = await runRefreshDelegate(delegate);
+      attempts.push(refreshDelegateAttempt(delegate, run));
       if (run.status === "ran") {
         const retry = await attemptClaudeQuota(options, attempts);
         if (retry.kind === "success") return retry.report;
@@ -795,7 +845,7 @@ function failureReport(
   // that belongs to an unrelated stored-profile account.
   if (failure.definitiveAuth && !definitiveFailureIsEnvOnly) {
     try {
-      deleteCachedProvider("claude");
+      deleteCachedProvider("claude", claudeProfileOverride()?.accountKey);
     } catch {
       // Current authentication remains definitive when cache I/O is blocked.
     }
@@ -1068,6 +1118,7 @@ function slugify(value: string): string {
  * @returns the credential state, or undefined when no token is supplied
  */
 function readEnvCredentialState(): CredentialState | undefined {
+  if (claudeProfileOverride()?.includeEnvToken === false) return undefined;
   const accessToken = claudeEnvOauthToken();
   if (accessToken !== undefined)
     return { status: "available", credentials: { source: "env", accessToken } };

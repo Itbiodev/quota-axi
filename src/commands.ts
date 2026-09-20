@@ -92,7 +92,7 @@ async function quotaTuiReport(
   }
 
   const refreshSeconds = flags.refreshSeconds ?? DEFAULT_REFRESH_SECONDS;
-  const hint = `Press q to quit · refreshing every ${formatInterval(refreshSeconds)}`;
+  const hint = `Press q to quit · r refresh · refreshing every ${formatInterval(refreshSeconds)}`;
   const last = await runLiveTui<QuotaAxiResponse>({
     load: () => loadQuota(flags.providers, options, true),
     render: frame,

@@ -6,7 +6,7 @@ import { scrollFrame, scrollHint } from "../src/tui-viewport.js";
 const ENTER_SCREEN = "\x1b[?1049h";
 const LEAVE_SCREEN = "\x1b[?1049l";
 const CLEAR_SCREEN = "\x1b[H\x1b[2J";
-const HINT = "Press q to quit · refreshing every 5m";
+const HINT = "Press q to quit · r refresh · refreshing every 5m";
 
 type Harness = {
   io: LiveTuiIo;
@@ -195,6 +195,69 @@ describe("live terminal report loop", () => {
     expect(io.pauses()).toBe(1);
     expect(io.subscriptions()).toBe(0);
     expect(io.pendingTimers()).toBe(0);
+  });
+
+  it("reloads immediately on r and restarts the interval", async () => {
+    const io = harness();
+    const source = counting();
+
+    const run = runLiveTui<number>({
+      load: source.load,
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    expect(source.calls()).toBe(1);
+
+    io.press("r");
+    await flush();
+    expect(io.output()).toContain("frame 2");
+    expect(source.calls()).toBe(2);
+
+    io.tick();
+    await flush();
+    expect(io.output()).toContain("frame 3");
+    expect(source.calls()).toBe(3);
+
+    io.press("R");
+    await flush();
+    expect(source.calls()).toBe(4);
+
+    io.press("q");
+    await expect(run).resolves.toBe(4);
+    expect(io.pendingTimers()).toBe(0);
+  });
+
+  it("does not queue a second load when r arrives while a refresh is in flight", async () => {
+    const io = harness();
+    let release: (() => void) | undefined;
+    let calls = 0;
+    const run = runLiveTui<string>({
+      load: async () => {
+        calls += 1;
+        if (calls === 1) {
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return `frame ${calls}`;
+      },
+      render: (value) => value,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+
+    io.press("r");
+    release?.();
+    await flush();
+
+    expect(calls).toBe(1);
+    expect(io.output()).toContain("frame 1");
+
+    io.press("q");
+    await run;
   });
 
   it("repaints on resize without refetching or resetting the interval", async () => {
@@ -394,6 +457,7 @@ describe("live terminal report at short heights", () => {
     expect(lines[1]).toBe("line 1");
     expect(lines.at(-1)).toContain("↓ 31 more");
     expect(lines.at(-1)).toContain("j/k PgUp/PgDn g/G scroll");
+    expect(lines.at(-1)).toContain("r refresh");
     expect(lines.at(-1)).toContain("q quit");
     await stop(live);
   });
@@ -475,6 +539,16 @@ describe("live terminal report at short heights", () => {
     await press(live, "j", "j", "j");
 
     live.io.tick();
+    await flush();
+    expect(live.io.frame().split("\n")[1]).toBe("line 4");
+    await stop(live);
+  });
+
+  it("keeps the scroll position across a manual r refresh", async () => {
+    const live = await start(10);
+    await press(live, "j", "j", "j");
+
+    live.io.press("r");
     await flush();
     expect(live.io.frame().split("\n")[1]).toBe("line 4");
     await stop(live);

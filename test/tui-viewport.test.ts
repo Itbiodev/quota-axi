@@ -3,7 +3,7 @@ import { renderQuotaTui } from "../src/tui.js";
 import { scrollFrame, scrollHint } from "../src/tui-viewport.js";
 import { fixtureResponse } from "./fixtures/tui-response.js";
 
-const HINT = "Press q to quit · refreshing every 5m";
+const HINT = "Press q to quit · r refresh · refreshing every 5m";
 
 /** The report exactly as the live loop renders it, at a fixed width. */
 function reportBody(): string {
@@ -265,6 +265,7 @@ describe("live report viewport", () => {
     );
     expect(scrolling).toContain("↑ 2 more");
     expect(scrolling).toContain("↓ 7 more");
+    expect(scrolling).toContain("r refresh");
     expect(scrolling).not.toContain(HINT);
   });
 });

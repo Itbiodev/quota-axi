@@ -69,8 +69,11 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * whose stored account id is optional.
  *
  * How that stamp is obtained is not the same question for each. A Claude
- * profile is fixed by this process's own environment, so deriving it here reads
- * the same selection the reading used. Kimi's is not derivable here at all.
+ * profile is the directory the reading actually used, so the adapter stamps
+ * it at fetch time: extra `.claude-*` lanes cannot re-derive that identity
+ * from process env at write time. Unstamped writes still fall back to the
+ * process-selected profile, which is what a single-lane machine produces.
+ * Kimi's is not derivable here at all.
  * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
  * request has returned can describe a deployment the numbers never came from;
  * and a Kimi reading need not come from that configuration in the first place,
@@ -90,7 +93,7 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
-  claude: claudeCredentialContextId,
+  claude: claudeStampContextId,
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   elevenlabs: elevenLabsReadingContextId,
@@ -105,9 +108,14 @@ const CONTEXT_SCOPED_PROVIDERS: Partial<
  * `JSON.stringify`, `Object.keys` and the TOON encoder all skip symbol keys.
  */
 const CODEX_STORED_ACCOUNT_ID = Symbol("codexStoredAccountId");
+const CLAUDE_CREDENTIAL_CONTEXT_ID = Symbol("claudeCredentialContextId");
 
 type CodexStampedQuota = ProviderQuota & {
   [CODEX_STORED_ACCOUNT_ID]?: string;
+};
+
+type ClaudeStampedQuota = ProviderQuota & {
+  [CLAUDE_CREDENTIAL_CONTEXT_ID]?: string;
 };
 
 export function stampCodexStoredAccountId(
@@ -116,6 +124,24 @@ export function stampCodexStoredAccountId(
 ): void {
   if (accountId)
     (provider as CodexStampedQuota)[CODEX_STORED_ACCOUNT_ID] = accountId;
+}
+
+/**
+ * Stamp the Claude profile identity the reading actually used. Extra profile
+ * lanes cannot re-derive that identity from process env at write time.
+ */
+export function stampClaudeCredentialContextId(
+  provider: ProviderQuota,
+  contextId: string,
+): void {
+  (provider as ClaudeStampedQuota)[CLAUDE_CREDENTIAL_CONTEXT_ID] = contextId;
+}
+
+function claudeStampContextId(provider: ProviderQuota): string | undefined {
+  return (
+    (provider as ClaudeStampedQuota)[CLAUDE_CREDENTIAL_CONTEXT_ID] ??
+    claudeCredentialContextId()
+  );
 }
 
 function codexStampContextId(provider: ProviderQuota): string | undefined {
