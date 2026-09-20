@@ -98,6 +98,7 @@ describe("CLI flag parsing", () => {
       "mimo",
       "deepseek",
       "openrouter",
+      "elevenlabs",
     ]);
   });
 
@@ -140,6 +141,7 @@ describe("CLI flag parsing", () => {
           "mimo",
           "deepseek",
           "openrouter",
+          "elevenlabs",
         ],
         json: true,
         full: true,
@@ -1578,6 +1580,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.openrouter = providerWithQuota(
       emptyFreshQuota("openrouter", "OpenRouter"),
     );
+    PROVIDERS.elevenlabs = providerWithQuota(freshElevenLabsQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -1594,6 +1597,7 @@ describe("default TOON decision blocks", () => {
       "copilot",
       "cursor",
       "deepseek",
+      "elevenlabs",
       "grok",
       "kimi",
       "mimo",
@@ -2715,6 +2719,33 @@ function freshCommandCodeQuota(): ProviderQuota {
       stale: false,
       refreshedAt: "2026-07-06T18:10:00Z",
       sourcesTried: ["pi:commandcode"],
+    },
+  };
+}
+
+function freshElevenLabsQuota(): ProviderQuota {
+  return {
+    provider: "elevenlabs",
+    label: "ElevenLabs",
+    source: "api",
+    plan: "creator",
+    windows: [
+      {
+        id: "characters",
+        label: "characters",
+        kind: "monthly",
+        percentUsed: 40,
+        percentRemaining: 60,
+        startsAt: "2026-06-12T00:00:00.000Z",
+        resetsAt: "2026-07-12T00:00:00.000Z",
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      authStatus: "usable",
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["env:ELEVENLABS_API_KEY"],
     },
   };
 }
